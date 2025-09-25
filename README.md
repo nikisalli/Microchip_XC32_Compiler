@@ -22,9 +22,9 @@ To verify that Docker is installed correctly.
 
 
   ```bash
-  git clone https://github.com/nikisalli/Microchip_XC32_Compiler.git
+  git clone https://github.com/nikisalli/Free_XC32_PRO_Compiler.git
 
-  cd Microchip_XC32_Compiler
+  cd Free_XC32_PRO_Compiler
 
   chmod +x ./scripts/run-in-docker.sh
 
