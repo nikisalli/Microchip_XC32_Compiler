@@ -13,3 +13,5 @@ xc32-v4.35-src/pic32m-build_windows
 
 # Installation dir
 xc32-v4.35-src/installed
+
+out/

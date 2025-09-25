@@ -731,10 +731,14 @@ extern int vsnprintf (char *, size_t, const char *, va_list);
 #endif
 
 /* Redefine abort to report an internal error w/o coredump, and
-   reporting the location of the error in the source file.  */
+   reporting the location of the error in the source file.
+   On MinGW builds, redefining abort() causes macro conflicts with
+   GCC 13 diagnostics; avoid the macro override there. */
 extern void fancy_abort (const char *, int, const char *)
-					 ATTRIBUTE_NORETURN ATTRIBUTE_COLD;
+                        ATTRIBUTE_NORETURN ATTRIBUTE_COLD;
+#if !defined(__MINGW32__) && !defined(__MINGW64__)
 #define abort() fancy_abort (__FILE__, __LINE__, __FUNCTION__)
+#endif
 
 /* Use gcc_assert(EXPR) to test invariants.  */
 #if ENABLE_ASSERT_CHECKING

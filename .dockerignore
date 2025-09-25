@@ -1,0 +1,12 @@
+.git
+.gitignore
+out
+temp_debug_files
+xc32-v4.35-src/pic32m-build
+xc32-v4.35-src/installed
+xc32-v4.35-src/*.tar.bz2
+*.tar.gz
+*.zip
+*.7z
+*.tmp
+*.log

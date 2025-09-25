@@ -18,6 +18,41 @@ BUILDDIR="$SCRIPT_DIRECTORY/xc32-v4.35-src/pic32m-build"
 # Default: `INSTALLDIR=${HOME}/Downloads/build/opt`
 INSTALLDIR="$SCRIPT_DIRECTORY/xc32-v4.35-src/installed/opt"
 
+# This is needed to hold libraries and include files needed by
+# binutils and gcc.
+hostinstalldir=${BUILDDIR}/opt
+
+CC=x86_64-w64-mingw32-gcc
+CXX=x86_64-w64-mingw32-g++
+PKG_CONFIG=x86_64-w64-mingw32-pkg-config
+PKG_CONFIG_PATH=/usr/x86_64-w64-mingw32/lib/pkgconfig
+CPPFLAGS="-I/usr/x86_64-w64-mingw32/include -I${hostinstalldir}/include -imacros host-defs.h"
+LDFLAGS="-L/usr/x86_64-w64-mingw32/lib -L${hostinstalldir}/lib"
+LIBS="$(x86_64-w64-mingw32-pkg-config --libs ncursesw 2>/dev/null || echo -lncursesw) -ltermcap"
+AR=x86_64-w64-mingw32-ar
+RANLIB=x86_64-w64-mingw32-ranlib
+
+export CC=x86_64-w64-mingw32-gcc
+export CXX=x86_64-w64-mingw32-g++
+export AR=x86_64-w64-mingw32-ar
+export RANLIB=x86_64-w64-mingw32-ranlib
+export HOST_TRIPLET=x86_64-w64-mingw32
+export WINEPATH="Z:\usr\x86_64-w64-mingw32\bin"
+
+# Prefer statically linked host tools to avoid shipping DLLs.
+# Set STATIC_LINK=0 to disable.
+STATIC_LINK=${STATIC_LINK:-1}
+if [ "${STATIC_LINK}" = "1" ]; then
+    HOST_LDFLAGS="-static -L${hostinstalldir}/lib"
+    HOST_STATIC_LIBS="-Wl,-Bstatic -lwinpthread -liconv -Wl,-Bdynamic"
+else
+    HOST_LDFLAGS="-L${hostinstalldir}/lib"
+    HOST_STATIC_LIBS=""
+fi
+
+BUILD_TRIPLET="$(gcc -dumpmachine)"
+HOST_TRIPLET="x86_64-w64-mingw32"
+
 # ==================================================================================================
 # Below this point, you don't need to change anything unless you are customizing.
 # ==================================================================================================
@@ -27,14 +62,13 @@ expat_srcdir=${SRCDIR}/expat-2.1.1
 binutils_srcdir=${SRCDIR}/binutils
 gcc_srcdir=${SRCDIR}/gcc
 
-# This is needed to hold libraries and include files needed by
-# binutils and gcc.
-hostinstalldir=${BUILDDIR}/opt
-
 libmchp_builddir=${BUILDDIR}/libmchp
 expat_builddir=${BUILDDIR}/expat
 binutils_builddir=${BUILDDIR}/binutils
 gcc_builddir=${BUILDDIR}/gcc
+
+# Use gnu89 so '//' comments and other GNU C extensions compile even with -pedantic in binutils.
+# CSTD="-std=gnu89"
 
 # First, build libmchp.
 PS4="[libmchp] "
@@ -47,10 +81,12 @@ PS4="[libmchp] "
 
     ${libmchp_srcdir}/configure \
                  --installdir=${hostinstalldir} \
-                 --smart-io-suffixdir=${libmchp_srcdir}
+                 --smart-io-suffixdir=${libmchp_srcdir} \
 
-    time make -j$(nproc) -f ${libmchp_srcdir}/Makefile all
-    make -f ${libmchp_srcdir}/Makefile install
+    time make -j$(nproc) -f ${libmchp_srcdir}/Makefile \
+         CC=${HOST_TRIPLET}-gcc CXX=${HOST_TRIPLET}-g++ AR=${HOST_TRIPLET}-ar RANLIB=${HOST_TRIPLET}-ranlib all
+    make -f ${libmchp_srcdir}/Makefile \
+         CC=${HOST_TRIPLET}-gcc CXX=${HOST_TRIPLET}-g++ AR=${HOST_TRIPLET}-ar RANLIB=${HOST_TRIPLET}-ranlib install
 )
 ret_code="$?"
 if [ $ret_code -ne 0 ]; then
@@ -68,7 +104,12 @@ PS4="[expat] "
     mkdir -p ${expat_builddir}
     cd ${expat_builddir}
 
-    ${expat_srcdir}/configure --prefix=${hostinstalldir} --disable-shared
+    ${expat_srcdir}/configure \
+        --build=${BUILD_TRIPLET} \
+        --host=${HOST_TRIPLET} \
+        --prefix=${hostinstalldir} \
+        --disable-shared \
+        --enable-static
 
     make install
 )
@@ -126,7 +167,11 @@ PS4="[binutils] "
     mkdir -p ${binutils_builddir}
     cd ${binutils_builddir}
 
+    RL_WIN_CPPFLAGS="-DVOID_SIGHANDLER -Dstrchr=strchr -Dstatic_assert=mips_static_assert"
+
     ${binutils_srcdir}/configure \
+                      --build=${BUILD_TRIPLET} \
+                      --host=${HOST_TRIPLET} \
                       --target=pic32mx \
                       --prefix=${INSTALLDIR} \
                       --program-prefix=pic32m- \
@@ -144,14 +189,15 @@ PS4="[binutils] "
                       --enable-interwork \
                       --enable-plugins \
                       --disable-64-bit-bfd \
-                      CPPFLAGS="-I${hostinstalldir}/include -imacros host-defs.h" \
-                      CFLAGS=-fcommon \
-                      LDFLAGS=-L${hostinstalldir}/lib
+                      CPPFLAGS="-I${hostinstalldir}/include -imacros host-defs.h ${RL_WIN_CPPFLAGS}" \
+                      CFLAGS="${CSTD} -fcommon -Wno-error=incompatible-pointer-types" \
+                      LDFLAGS="${HOST_LDFLAGS}"
 
     time make -j$(nproc) all \
-         CPPFLAGS="-I${hostinstalldir}/include -imacros host-defs.h" \
-         CFLAGS=-fcommon \
-         LDFLAGS=-L${hostinstalldir}/lib
+         CPPFLAGS="-I${hostinstalldir}/include -imacros host-defs.h ${RL_WIN_CPPFLAGS}" \
+         CFLAGS="${CSTD} -fcommon -Wno-error=incompatible-pointer-types" \
+         LDFLAGS="${HOST_LDFLAGS}" \
+         HOST_LIBS="${HOST_STATIC_LIBS}"
 
     make install
 
@@ -172,21 +218,32 @@ PS4="[gcc] "
     mkdir -p ${gcc_builddir}
     cd ${gcc_builddir}
 
-    ${gcc_srcdir}/configure \
+    gcc_srcdir_RELATIVE=$(realpath --relative-to="." "${gcc_srcdir}")
+
+    # Ensure stdlib.h is seen before gcc/system.h overrides abort(),
+    # and prepare to run Windows-built drivers via Wine during all-gcc.
+    # Important: preserve GCC's internal -B and include search paths so the
+    # driver can find cc1/cc1plus in the build tree. We inject Wine but keep
+    # the canonical GCC_FOR_TARGET command layout used by the Makefile.
+    WINE_BIN=${WINE_BIN:-wine}
+    GCC_FOR_TARGET_OVERRIDE="${WINE_BIN} ./xgcc.exe -B./ -B\$(build_tooldir)/bin/ -isystem \$(build_tooldir)/include -isystem \$(build_tooldir)/sys-include -L\$(objdir)/../ld -mafrlcsj"
+    GXX_FOR_TARGET_OVERRIDE="${WINE_BIN} ./xg++.exe -B./ -B\$(build_tooldir)/bin/ -isystem \$(build_tooldir)/include -isystem \$(build_tooldir)/sys-include -L\$(objdir)/../ld -mafrlcsj"
+
+    ${gcc_srcdir_RELATIVE}/configure \
+                 --build=${BUILD_TRIPLET} \
+                 --host=${HOST_TRIPLET} \
                  --target=pic32mx \
-                 --build=x86_64-w64-mingw32 \
-                 --host=x86_64-w64-mingw32 \
-                 --prefix="$(cygpath -w "$INSTALLDIR")" \
+                 --prefix=${INSTALLDIR} \
                  --program-prefix=pic32m- \
-                 --with-sysroot="/$(cygpath -w "$INSTALLDIR/pic32mx")" \
+                 --with-sysroot=${INSTALLDIR}/pic32mx \
                  --with-bugurl=http://example.com \
                  --with-pkgversion="Microchip XC32 Compiler v4.35 custom" \
-                 --bindir="$(cygpath -w "$INSTALLDIR/bin/bin")" \
-                 --infodir="$(cygpath -w "${INSTALLDIR}/share/doc/xc32-pic32m-gcc/info")" \
-                 --mandir="$(cygpath -w "${INSTALLDIR}/share/doc/xc32-pic32m-gcc/man")" \
-                 --libdir="$(cygpath -w "${INSTALLDIR}/lib")" \
-                 --libexecdir="$(cygpath -w "${INSTALLDIR}/bin/bin")" \
-                 --with-build-sysroot="/$(cygpath -w "${INSTALLDIR}/pic32mx")" \
+                 --bindir=${INSTALLDIR}/bin/bin \
+                 --infodir=${INSTALLDIR}/share/doc/xc32-pic32m-gcc/info \
+                 --mandir=${INSTALLDIR}/share/doc/xc32-pic32m-gcc/man \
+                 --libdir=${INSTALLDIR}/lib \
+                 --libexecdir=${INSTALLDIR}/bin/bin \
+                 --with-build-sysroot=${INSTALLDIR}/pic32mx \
                  --enable-stage1-languages=c \
                  --enable-languages=c,c++ \
                  --enable-target-optspace \
@@ -226,13 +283,28 @@ PS4="[gcc] "
                  --with-gnu-as \
                  --with-gnu-ld \
                  '--with-host-libstdcxx=-static-libgcc -static-libstdc++ -Wl,-lstdc++ -lm' \
-                 CPPFLAGS="-I$(cygpath -w "${hostinstalldir}/include") -imacros host-defs.h" \
-                 LDFLAGS=-L$(cygpath -w "${hostinstalldir}/lib")
+                 CPPFLAGS="-I${hostinstalldir}/include -imacros host-defs.h ${RL_WIN_CPPFLAGS}" \
+                 LDFLAGS="${HOST_LDFLAGS}"
+
+    export DEVNULL=nul
 
     time make -j$(nproc) all-gcc \
-         STAGE1_LIBS="-lexpat -lmchp -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic" \
-         CPPFLAGS="-I$(cygpath -w "${hostinstalldir}/include") -imacros host-defs.h" \
-         LDFLAGS=-L$(cygpath -w "${hostinstalldir}/lib")
+         STAGE1_LIBS="-lexpat -lmchp -Wl,-Bstatic -lstdc++ -lwinpthread -liconv -Wl,-Bdynamic" \
+         CPPFLAGS="-I${hostinstalldir}/include -imacros host-defs.h ${RL_WIN_CPPFLAGS}" \
+         LDFLAGS="${HOST_LDFLAGS}" \
+         GCC_FOR_TARGET="${GCC_FOR_TARGET_OVERRIDE}" \
+         GXX_FOR_TARGET="${GXX_FOR_TARGET_OVERRIDE}" \
+         DEVNULL=nul \
+         HOST_LIBS="${HOST_STATIC_LIBS}" \
+         MAKEOVERRIDES="DEVNULL=nul"
+
+
+    make install-gcc \
+         GCC_FOR_TARGET="${GCC_FOR_TARGET_OVERRIDE}" \
+         GXX_FOR_TARGET="${GXX_FOR_TARGET_OVERRIDE}" \
+         DEVNULL=nul \
+         HOST_LIBS="${HOST_STATIC_LIBS}" \
+         MAKEOVERRIDES="DEVNULL=nul"
 
     make install-gcc
 )
@@ -244,18 +316,18 @@ fi
 
 
 # Copy in the resource info file from an existing compiler installation.
-PS4="[resource] "
-(
-    set -ex
-
-    mkdir -p ${INSTALLDIR}/bin
-    cp ${XC32DIR}/bin/xc32_device.info ${INSTALLDIR}/bin/xc32_device.info
-)
-ret_code="$?"
-if [ $ret_code -ne 0 ]; then
-    echo "Error: ${PS4}failed to copy!"
-    exit "$ret_code"
-fi
+# PS4="[resource] "
+# (
+#     set -ex
+# 
+#     mkdir -p ${INSTALLDIR}/bin
+#     cp ${XC32DIR}/bin/xc32_device.info ${INSTALLDIR}/bin/xc32_device.info
+# )
+# ret_code="$?"
+# if [ $ret_code -ne 0 ]; then
+#     echo "Error: ${PS4}failed to copy!"
+#     exit "$ret_code"
+# fi
 
 
 echo "Done! Built successfully."

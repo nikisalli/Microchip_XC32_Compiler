@@ -2505,8 +2505,8 @@ default_section_name (tree decl, SECTION_FLAGS_INT flags)
    */
   if (decl)
     {
-      len_this_default_name = sprintf (this_default_name, "*_%8.8lx%lx",
-				       (unsigned long) decl, current_time);
+      len_this_default_name = sprintf(this_default_name,"*_%8.8llx%llx",
+                                      (unsigned long long)(uintptr_t) decl, (unsigned long long) current_time);
     }
   else
     {
